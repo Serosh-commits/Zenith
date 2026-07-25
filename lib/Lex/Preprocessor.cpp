@@ -1,0 +1,340 @@
+#include "zenith/Lex/Preprocessor.h"
+#include "llvm/Support/MemoryBuffer.h"
+
+namespace zenith {
+
+Preprocessor::Preprocessor(LangOptions &LangOpts, SourceManager &SourceMgr, DiagnosticsEngine &Diags, HeaderSearch &Headers, FileManager &FileMgr)
+    : LangOpts(LangOpts), SourceMgr(SourceMgr), Diags(Diags), Headers(Headers), FileMgr(FileMgr) {
+    Identifiers.AddKeywords(LangOpts);
+}
+
+Preprocessor::~Preprocessor() {
+    for (auto &Entry : Macros) {
+        delete Entry.getValue();
+    }
+}
+
+MacroInfo *Preprocessor::getMacroInfo(IdentifierInfo *II) const {
+    if (!II) return nullptr;
+    auto It = Macros.find(II->getName());
+    if (It != Macros.end())
+        return It->second;
+    return nullptr;
+}
+
+void Preprocessor::setMacroInfo(IdentifierInfo *II, MacroInfo *MI) {
+    if (!II) return;
+    Macros[II->getName()] = MI;
+}
+
+void Preprocessor::EnterMainSourceFile(FileID FID) {
+    SourceMgr.setMainFileID(FID);
+    const ::llvm::MemoryBuffer *Buffer = SourceMgr.getBuffer(FID);
+    if (!Buffer) return;
+
+    auto L = std::make_unique<Lexer>(FID, Buffer, SourceMgr, LangOpts);
+    L->setIdentifierTable(&Identifiers);
+    CurLexer = L.get();
+    IncludeStack.push_back(std::move(L));
+}
+
+void Preprocessor::EnterSourceFile(FileID FID, SourceLocation IncludeLoc) {
+    const ::llvm::MemoryBuffer *Buffer = SourceMgr.getBuffer(FID);
+    if (!Buffer) return;
+
+    auto L = std::make_unique<Lexer>(FID, Buffer, SourceMgr, LangOpts);
+    L->setIdentifierTable(&Identifiers);
+    CurLexer = L.get();
+    IncludeStack.push_back(std::move(L));
+}
+
+void Preprocessor::Lex(Token &Result) {
+    bool NeedLex = true;
+    while (true) {
+        if (!CurLexer) {
+            Result.startToken();
+            Result.setKind(tok::eof);
+            return;
+        }
+
+        if (NeedLex) {
+            CurLexer->Lex(Result);
+        }
+        NeedLex = true;
+
+        if (Result.is(tok::eof)) {
+            IncludeStack.pop_back();
+            if (IncludeStack.empty()) {
+                CurLexer = nullptr;
+                return;
+            } else {
+                CurLexer = IncludeStack.back().get();
+                continue;
+            }
+        }
+
+        if (Result.isAtStartOfLine() && Result.is(tok::hash)) {
+            NeedLex = HandleDirective(Result);
+            continue;
+        }
+
+        if (SkippingUntilDirective)
+            continue;
+
+        if (Result.is(tok::identifier)) {
+            IdentifierInfo *II = Result.getIdentifierInfo();
+            if (MacroInfo *MI = getMacroInfo(II)) {
+                if (!MI->isDisabled()) {
+                    if (ExpandMacro(Result, II, MI))
+                        continue;
+                }
+            }
+        }
+
+        return;
+    }
+}
+
+bool Preprocessor::HandleDirective(Token &Result) {
+    if (!CurLexer) return true;
+    CurLexer->Lex(Result);
+    ::llvm::StringRef DirName = Lexer::getSpelling(Result, SourceMgr, LangOpts);
+
+    if (DirName == "define") {
+        if (!SkippingUntilDirective)
+            HandleDefineDirective(Result);
+        return false;
+    } else if (DirName == "undef") {
+        if (!SkippingUntilDirective)
+            HandleUndefDirective(Result);
+        return false;
+    } else if (DirName == "include") {
+        if (!SkippingUntilDirective)
+            HandleIncludeDirective(Result);
+        return true;
+    } else if (DirName == "ifdef") {
+        HandleIfdefDirective(Result, false);
+        return true;
+    } else if (DirName == "ifndef") {
+        HandleIfdefDirective(Result, true);
+        return true;
+    } else if (DirName == "if") {
+        HandleIfDirective(Result);
+        return true;
+    } else if (DirName == "else") {
+        HandleElseDirective(Result);
+        return true;
+    } else if (DirName == "elif") {
+        HandleElifDirective(Result);
+        return true;
+    } else if (DirName == "endif") {
+        HandleEndifDirective(Result);
+        return true;
+    }
+    return true;
+}
+
+void Preprocessor::SkipExcludedConditionalBlock() {
+    unsigned Depth = 0;
+    Token Tok;
+    while (true) {
+        if (!CurLexer) break;
+        CurLexer->Lex(Tok);
+        if (Tok.is(tok::eof)) break;
+
+        if (Tok.isAtStartOfLine() && Tok.is(tok::hash)) {
+            CurLexer->Lex(Tok);
+            ::llvm::StringRef DirName = Lexer::getSpelling(Tok, SourceMgr, LangOpts);
+
+            if (DirName == "if" || DirName == "ifdef" || DirName == "ifndef") {
+                ++Depth;
+            } else if (DirName == "endif") {
+                if (Depth == 0) {
+                    PPConditionalInfo CI;
+                    CurLexer->popConditionalLevel(CI);
+                    SkippingUntilDirective = CI.WasSkipping;
+                    break;
+                } else {
+                    --Depth;
+                }
+            } else if (DirName == "else") {
+                if (Depth == 0) {
+                    PPConditionalInfo *Cond = const_cast<PPConditionalInfo*>(CurLexer->peekConditionalLevel());
+                    if (Cond && !Cond->FoundNonSkip) {
+                        Cond->FoundNonSkip = true;
+                        SkippingUntilDirective = false;
+                        break;
+                    } else {
+                        SkippingUntilDirective = true;
+                    }
+                }
+            } else if (DirName == "elif" || DirName == "elifdef" || DirName == "elifndef") {
+                if (Depth == 0) {
+                    PPConditionalInfo *Cond = const_cast<PPConditionalInfo*>(CurLexer->peekConditionalLevel());
+                    if (Cond && !Cond->FoundNonSkip) {
+                        Cond->FoundNonSkip = true;
+                        SkippingUntilDirective = false;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void Preprocessor::HandleDefineDirective(Token &Result) {
+    CurLexer->Lex(Result);
+    if (Result.isNot(tok::identifier) && Result.isNot(tok::raw_identifier)) return;
+
+    IdentifierInfo *MacroName = Result.getIdentifierInfo();
+    if (!MacroName && Result.is(tok::raw_identifier)) {
+        MacroName = &Identifiers.get(Result.getRawIdentifier());
+    }
+
+    MacroInfo *MI = new MacroInfo(Result.getLocation());
+
+    while (true) {
+        CurLexer->Lex(Result);
+        if (Result.is(tok::eod) || Result.is(tok::eof) || Result.isAtStartOfLine()) break;
+        MI->ReplacementTokens.push_back(Result);
+    }
+
+    setMacroInfo(MacroName, MI);
+}
+
+void Preprocessor::HandleUndefDirective(Token &Result) {
+    CurLexer->Lex(Result);
+    if (Result.isNot(tok::identifier) && Result.isNot(tok::raw_identifier)) return;
+
+    ::llvm::StringRef Name = Result.is(tok::identifier) ?
+        Result.getIdentifierInfo()->getName() : Result.getRawIdentifier();
+
+    auto It = Macros.find(Name);
+    if (It != Macros.end()) {
+        delete It->second;
+        Macros.erase(It);
+    }
+
+    while (true) {
+        CurLexer->Lex(Result);
+        if (Result.is(tok::eod) || Result.is(tok::eof) || Result.isAtStartOfLine()) break;
+    }
+}
+
+void Preprocessor::HandleIncludeDirective(Token &Result) {
+    CurLexer->Lex(Result);
+    bool IsAngled = false;
+    std::string Filename;
+
+    if (Result.is(tok::less)) {
+        IsAngled = true;
+        while (true) {
+            CurLexer->Lex(Result);
+            if (Result.is(tok::greater) || Result.is(tok::eof) || Result.is(tok::eod)) break;
+            if (Result.is(tok::identifier) || Result.is(tok::raw_identifier)) {
+                Filename += Result.getRawIdentifier().str();
+            } else if (Result.is(tok::period)) {
+                Filename += ".";
+            } else if (Result.is(tok::slash)) {
+                Filename += "/";
+            }
+        }
+    } else if (Result.is(tok::string_literal)) {
+        Filename = Result.getLiteralData();
+        if (Filename.size() >= 2 && Filename.front() == '"' && Filename.back() == '"') {
+            Filename = Filename.substr(1, Filename.size() - 2);
+        }
+    }
+
+    if (!Filename.empty()) {
+        auto FullPath = Headers.LookupFile(Filename, IsAngled);
+        if (FullPath) {
+            FileEntry *FE = FileMgr.getFileRef(*FullPath);
+            if (FE) {
+                FileID FID = SourceMgr.createFileID(FE, Result.getLocation());
+                EnterSourceFile(FID, Result.getLocation());
+            }
+        }
+    }
+}
+
+void Preprocessor::HandleIfdefDirective(Token &Result, bool isIfndef) {
+    if (!CurLexer) return;
+    CurLexer->Lex(Result);
+    if (Result.isNot(tok::identifier) && Result.isNot(tok::raw_identifier)) return;
+
+    IdentifierInfo *II = Result.getIdentifierInfo();
+    if (!II && Result.is(tok::raw_identifier)) {
+        II = &Identifiers.get(Result.getRawIdentifier());
+    }
+
+    MacroInfo *MI = getMacroInfo(II);
+    bool Condition = MI != nullptr;
+    if (isIfndef) Condition = !Condition;
+
+    CurLexer->pushConditionalLevel(Result.getLocation(), SkippingUntilDirective, Condition, false);
+    if (!Condition) {
+        SkippingUntilDirective = true;
+        SkipExcludedConditionalBlock();
+    }
+}
+
+void Preprocessor::HandleIfDirective(Token &Result) {
+    if (!CurLexer) return;
+    CurLexer->pushConditionalLevel(Result.getLocation(), SkippingUntilDirective, false, false);
+    SkippingUntilDirective = true;
+    SkipExcludedConditionalBlock();
+}
+
+void Preprocessor::HandleElseDirective(Token &Result) {
+    if (!CurLexer) return;
+    PPConditionalInfo *Cond = const_cast<PPConditionalInfo*>(CurLexer->peekConditionalLevel());
+    if (Cond) {
+        if (Cond->FoundNonSkip) {
+            SkippingUntilDirective = true;
+            SkipExcludedConditionalBlock();
+        } else {
+            Cond->FoundNonSkip = true;
+            SkippingUntilDirective = false;
+        }
+    }
+}
+
+void Preprocessor::HandleElifDirective(Token &Result) {
+    if (!CurLexer) return;
+    PPConditionalInfo *Cond = const_cast<PPConditionalInfo*>(CurLexer->peekConditionalLevel());
+    if (Cond) {
+        if (Cond->FoundNonSkip) {
+            SkippingUntilDirective = true;
+            SkipExcludedConditionalBlock();
+        } else {
+            Cond->FoundNonSkip = true;
+            SkippingUntilDirective = false;
+        }
+    }
+}
+
+void Preprocessor::HandleEndifDirective(Token &Result) {
+    if (!CurLexer) return;
+    PPConditionalInfo CI;
+    if (!CurLexer->popConditionalLevel(CI)) {
+        SkippingUntilDirective = CI.WasSkipping;
+    }
+}
+
+bool Preprocessor::ExpandMacro(Token &Identifier, IdentifierInfo *II, MacroInfo *MI) {
+    if (MI->tokens().empty())
+        return false;
+
+    MI->setDisabled(true);
+    Token ExpandedTok = MI->tokens().front();
+    ExpandedTok.setLocation(Identifier.getLocation());
+    if (Identifier.isAtStartOfLine()) ExpandedTok.setFlag(Token::StartOfLine);
+    if (Identifier.hasLeadingSpace()) ExpandedTok.setFlag(Token::LeadingSpace);
+
+    Identifier = ExpandedTok;
+    MI->setDisabled(false);
+    return false;
+}
+
+}
