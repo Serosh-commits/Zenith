@@ -16,6 +16,11 @@ struct LangOptions {
     bool Digraphs = false;
 
     LangOptions() = default;
+
+    bool isCPlusPlus() const { return CPlusPlus || CPlusPlus11 || CPlusPlus17 || CPlusPlus20; }
+    bool isCPlusPlus11() const { return CPlusPlus11 || CPlusPlus17 || CPlusPlus20; }
+    bool isCPlusPlus17() const { return CPlusPlus17 || CPlusPlus20; }
+    bool isCPlusPlus20() const { return CPlusPlus20; }
 };
 
 }

@@ -12,6 +12,8 @@ class IdentifierInfo {
     tok::TokenKind TokenID = tok::identifier;
     bool IsKeyword = false;
     bool IsBuiltin = false;
+    bool IsExtension = false;
+    bool IsFutureCompatKeyword = false;
     void* FETokenInfo = nullptr;
 
 public:
@@ -28,6 +30,12 @@ public:
 
     bool isBuiltin() const { return IsBuiltin; }
     void setIsBuiltin(bool b) { IsBuiltin = b; }
+
+    bool isExtension() const { return IsExtension; }
+    void setIsExtension(bool ext) { IsExtension = ext; }
+
+    bool isFutureCompatKeyword() const { return IsFutureCompatKeyword; }
+    void setIsFutureCompatKeyword(bool future) { IsFutureCompatKeyword = future; }
 
     void* getFETokenInfo() const { return FETokenInfo; }
     void setFETokenInfo(void* info) { FETokenInfo = info; }
