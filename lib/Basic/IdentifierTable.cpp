@@ -4,10 +4,10 @@
 namespace zenith {
 
 IdentifierInfo& IdentifierTable::get(::llvm::StringRef Name) {
-    auto Inserted = HashTable.insert({Name, IdentifierInfo{}});
-    IdentifierInfo &Entry = Inserted.first->second;
+    auto Iter = HashTable.try_emplace(Name).first;
+    IdentifierInfo &Entry = Iter->second;
     if (Entry.getName().empty()) {
-        Entry.setName(Name);
+        Entry.setName(Iter->getKey());
     }
     return Entry;
 }
@@ -51,9 +51,14 @@ void IdentifierTable::AddKeywords(const LangOptions& LangOpts) {
     AddKw("void", tok::kw_void);
     AddKw("volatile", tok::kw_volatile);
     AddKw("while", tok::kw_while);
-    AddKw("bool", tok::kw_bool);
-    AddKw("inline", tok::kw_inline);
-    AddKw("restrict", tok::kw_restrict);
+
+    if (LangOpts.C99 || LangOpts.isCPlusPlus()) {
+        AddKw("bool", tok::kw_bool);
+        AddKw("inline", tok::kw_inline);
+    }
+    if (LangOpts.C99) {
+        AddKw("restrict", tok::kw_restrict);
+    }
 
     if (LangOpts.isCPlusPlus()) {
         AddKw("class", tok::kw_class);

@@ -31,6 +31,29 @@ TEST(IdentifierTableTest, RespectsLanguageMode) {
     EXPECT_TRUE(Table.get("bool").isKeyword());
 }
 
+TEST(IdentifierTableTest, C99OnlyKeywordsRespectOptions) {
+    LangOptions LangOpts;
+    LangOpts.C99 = false;
+    IdentifierTable Table;
+    Table.AddKeywords(LangOpts);
+
+    EXPECT_FALSE(Table.get("restrict").isKeyword());
+    EXPECT_FALSE(Table.get("bool").isKeyword());
+    EXPECT_FALSE(Table.get("inline").isKeyword());
+}
+
+TEST(IdentifierTableTest, CPlusPlusKeywordCoverage) {
+    LangOptions LangOpts;
+    LangOpts.C99 = false;
+    LangOpts.CPlusPlus = true;
+    IdentifierTable Table;
+    Table.AddKeywords(LangOpts);
+
+    EXPECT_TRUE(Table.get("bool").isKeyword());
+    EXPECT_TRUE(Table.get("inline").isKeyword());
+    EXPECT_FALSE(Table.get("restrict").isKeyword());
+}
+
 TEST(LangOptionsTest, ExposesLanguageModeHelpers) {
     LangOptions LangOpts;
     LangOpts.CPlusPlus = true;
