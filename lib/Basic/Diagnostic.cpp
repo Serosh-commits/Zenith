@@ -10,6 +10,10 @@ DiagnosticBuilder DiagnosticsEngine::Report(SourceLocation Loc, unsigned DiagID)
     return DiagnosticBuilder(this, Loc, DiagID);
 }
 
+DiagnosticBuilder DiagnosticsEngine::Report(unsigned DiagID) {
+    return Report(SourceLocation(), DiagID);
+}
+
 void DiagnosticsEngine::EmitDiag(SourceLocation Loc, unsigned DiagID, const std::vector<std::string>& Args) {
     diag::Severity Level = DiagIDs->getSeverity(DiagID);
     if (Level == diag::Severity::Error || Level == diag::Severity::Fatal) {
@@ -21,6 +25,10 @@ void DiagnosticsEngine::EmitDiag(SourceLocation Loc, unsigned DiagID, const std:
     if (!Consumer) return;
 
     ::llvm::StringRef FormatStr = DiagIDs->getDescription(DiagID);
+    if (FormatStr.empty()) {
+        Consumer->HandleDiagnostic(Level, Loc, "<unknown diagnostic>");
+        return;
+    }
     std::string Message;
     Message.reserve(FormatStr.size() + 32);
 
@@ -44,7 +52,7 @@ void DiagnosticsEngine::EmitDiag(SourceLocation Loc, unsigned DiagID, const std:
 TextDiagnosticPrinter::TextDiagnosticPrinter(::llvm::raw_ostream& os) : OS(os) {}
 
 void TextDiagnosticPrinter::HandleDiagnostic(diag::Severity Level, SourceLocation Loc, ::llvm::StringRef Message) {
-    OS << Loc.getRawEncoding() << ": ";
+    OS << (Loc.isValid() ? std::to_string(Loc.getRawEncoding()) : "<unknown>") << ": ";
     switch (Level) {
         case diag::Severity::Ignored: OS << "ignored: "; break;
         case diag::Severity::Note: OS << "note: "; break;
