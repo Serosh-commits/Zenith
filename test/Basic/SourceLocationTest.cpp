@@ -50,6 +50,11 @@ TEST(SourceLocationTest, RawAndPointerEncoding) {
     EXPECT_EQ(Decoded, Loc);
 }
 
+TEST(SourceLocationTest, OffsetOverflowIsRejected) {
+    SourceLocation Loc(0x7fffffffu);
+    EXPECT_DEATH({ (void)Loc.getLocWithOffset(1); }, "offset overflow");
+}
+
 TEST(SourceLocationTest, PairOfFileLocations) {
     SourceLocation L1(100);
     SourceLocation L2(200);
