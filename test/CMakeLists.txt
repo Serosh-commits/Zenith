@@ -7,6 +7,7 @@ if(GTest_FOUND)
     Basic/SourceLocationTest.cpp
     Basic/FileManagerTest.cpp
     Basic/SourceManagerTest.cpp
+    Basic/DiagnosticTest.cpp
   )
   target_link_libraries(ZenithBasicTests PRIVATE ZenithBasic GTest::gtest_main)
   gtest_discover_tests(ZenithBasicTests)

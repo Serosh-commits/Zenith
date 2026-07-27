@@ -3,9 +3,11 @@
 #include "zenith/Basic/SourceLocation.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
+#include <functional>
 #include <vector>
 #include <string>
 #include <memory>
+#include <utility>
 
 namespace zenith {
 
@@ -15,6 +17,21 @@ class DiagnosticConsumer {
 public:
     virtual ~DiagnosticConsumer() = default;
     virtual void HandleDiagnostic(diag::Severity Level, SourceLocation Loc, ::llvm::StringRef Message) = 0;
+};
+
+class DiagnosticConsumerAdapter {
+public:
+    using Handler = std::function<void(diag::Severity, SourceLocation, ::llvm::StringRef)>;
+
+    explicit DiagnosticConsumerAdapter(Handler HandlerFn)
+        : HandlerFn(std::move(HandlerFn)) {}
+
+    void HandleDiagnostic(diag::Severity Level, SourceLocation Loc, ::llvm::StringRef Message) {
+        HandlerFn(Level, Loc, Message);
+    }
+
+private:
+    Handler HandlerFn;
 };
 
 class DiagnosticsEngine {
@@ -32,6 +49,7 @@ public:
     diag::DiagnosticIDs& getDiagnosticIDs() { return *DiagIDs; }
     
     DiagnosticBuilder Report(SourceLocation Loc, unsigned DiagID);
+    DiagnosticBuilder Report(unsigned DiagID);
     
     bool hasErrorOccurred() const { return ErrorCount > 0; }
     unsigned getNumErrors() const { return ErrorCount; }
@@ -60,10 +78,7 @@ public:
     }
 
     ~DiagnosticBuilder() {
-        if (!Emitted && Engine) {
-            Engine->EmitDiag(Loc, DiagID, Args);
-            Emitted = true;
-        }
+        emit();
     }
 
     DiagnosticBuilder& operator<<(::llvm::StringRef Str) {
@@ -74,6 +89,13 @@ public:
     DiagnosticBuilder& operator<<(int Val) {
         Args.push_back(std::to_string(Val));
         return *this;
+    }
+
+    void emit() {
+        if (!Emitted && Engine) {
+            Engine->EmitDiag(Loc, DiagID, Args);
+            Emitted = true;
+        }
     }
 };
 
