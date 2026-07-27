@@ -50,6 +50,10 @@ FullSourceLoc FullSourceLoc::getSpellingLoc() const {
     return FullSourceLoc(SrcMgr->getSpellingLoc(*this), *SrcMgr);
 }
 
+FullSourceLoc FullSourceLoc::getFileLoc() const {
+    return FullSourceLoc(SrcMgr->getFileLoc(*this), *SrcMgr);
+}
+
 PresumedLoc FullSourceLoc::getPresumedLoc() const {
     return SrcMgr->getPresumedLoc(*this);
 }

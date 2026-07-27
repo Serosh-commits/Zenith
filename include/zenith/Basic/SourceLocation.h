@@ -84,6 +84,7 @@ public:
     bool isMacroID() const { return (ID & MacroIDBit) != 0; }
 
     SourceLocation getLocWithOffset(IntTy Offset) const {
+        assert(((getOffset() + Offset) & MacroIDBit) == 0 && "offset overflow");
         SourceLocation L;
         L.ID = ID + Offset;
         return L;
@@ -230,6 +231,7 @@ public:
     FileID getFileID() const;
     FullSourceLoc getExpansionLoc() const;
     FullSourceLoc getSpellingLoc() const;
+    FullSourceLoc getFileLoc() const;
     PresumedLoc getPresumedLoc() const;
 
     unsigned getExpansionLineNumber() const;
