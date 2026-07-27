@@ -19,14 +19,14 @@ public:
     virtual void HandleDiagnostic(diag::Severity Level, SourceLocation Loc, ::llvm::StringRef Message) = 0;
 };
 
-class DiagnosticConsumerAdapter {
+class DiagnosticConsumerAdapter : public DiagnosticConsumer {
 public:
     using Handler = std::function<void(diag::Severity, SourceLocation, ::llvm::StringRef)>;
 
     explicit DiagnosticConsumerAdapter(Handler HandlerFn)
         : HandlerFn(std::move(HandlerFn)) {}
 
-    void HandleDiagnostic(diag::Severity Level, SourceLocation Loc, ::llvm::StringRef Message) {
+    void HandleDiagnostic(diag::Severity Level, SourceLocation Loc, ::llvm::StringRef Message) override {
         HandlerFn(Level, Loc, Message);
     }
 
