@@ -114,10 +114,29 @@ TEST(TokenTest, RawIdentifierAndLiteralAccessors) {
     Tok.setLength(11);
 
     EXPECT_EQ(Tok.getRawIdentifier(), "my_variable");
+    EXPECT_EQ(Tok.getName(), "my_variable");
 
     Token LitTok;
     LitTok.startToken();
     LitTok.setKind(tok::numeric_constant);
     LitTok.setLiteralData("12345");
     EXPECT_STREQ(LitTok.getLiteralData(), "12345");
+}
+
+TEST(TokenTest, TokenNameHelpersExposeExpectedSpelling) {
+    EXPECT_STREQ(tok::getTokenName(tok::identifier), "identifier");
+    EXPECT_STREQ(tok::getKeywordSpelling(tok::kw_if), "if");
+    EXPECT_STREQ(tok::getPunctuatorSpelling(tok::l_paren), "(");
+}
+
+TEST(TokenTest, TokenKindClassificationHelpersRecognizeKeywordsAndPunctuators) {
+    EXPECT_TRUE(tok::isKeyword(tok::kw_if));
+    EXPECT_TRUE(tok::isKeyword(tok::kw_void));
+    EXPECT_FALSE(tok::isKeyword(tok::identifier));
+    EXPECT_FALSE(tok::isKeyword(tok::numeric_constant));
+
+    EXPECT_TRUE(tok::isPunctuator(tok::l_paren));
+    EXPECT_TRUE(tok::isPunctuator(tok::arrow));
+    EXPECT_FALSE(tok::isPunctuator(tok::kw_return));
+    EXPECT_FALSE(tok::isPunctuator(tok::string_literal));
 }

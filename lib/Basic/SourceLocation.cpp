@@ -1,12 +1,22 @@
 #include "zenith/Basic/SourceLocation.h"
 #include "zenith/Basic/SourceManager.h"
+#include "llvm/ADT/DenseMapInfo.h"
+#include "llvm/ADT/FoldingSet.h"
 #include "llvm/Support/raw_ostream.h"
-#include <sstream>
+#include <cassert>
+#include <string>
+#include <utility>
 
 namespace zenith {
 
+static_assert(std::is_trivially_destructible_v<SourceLocation>,
+              "SourceLocation must be trivially destructible because it is used in unions");
+
+static_assert(std::is_trivially_destructible_v<SourceRange>,
+              "SourceRange must be trivially destructible because it is used in unions");
+
 unsigned SourceLocation::getHashValue() const {
-    return ID * 2654435761u;
+    return llvm::DenseMapInfo<UIntTy>::getHashValue(ID);
 }
 
 void SourceLocation::print(::llvm::raw_ostream &OS, const SourceManager &SM) const {
