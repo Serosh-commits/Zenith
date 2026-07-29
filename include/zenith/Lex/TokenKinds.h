@@ -41,6 +41,26 @@ inline bool isAnnotation(TokenKind K) {
     return K >= annot_cxxscope && K <= annot_embed;
 }
 
+inline bool isKeyword(TokenKind K) {
+    switch (K) {
+#define KEYWORD(X, Y) case kw_##X:
+#include "zenith/Lex/TokenKinds.def"
+        return true;
+    default:
+        return false;
+    }
+}
+
+inline bool isPunctuator(TokenKind K) {
+    switch (K) {
+#define PUNCTUATOR(X, Y) case X:
+#include "zenith/Lex/TokenKinds.def"
+        return true;
+    default:
+        return false;
+    }
+}
+
 }
 
 namespace llvm {
