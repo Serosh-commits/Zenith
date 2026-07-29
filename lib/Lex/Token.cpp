@@ -32,13 +32,13 @@ const char *getKeywordSpelling(TokenKind Kind) {
 
 namespace zenith {
 
-const char *Token::getName() const {
+::llvm::StringRef Token::getName() const {
     if (is(tok::raw_identifier))
-        return getRawIdentifier().data();
+        return getRawIdentifier();
     if (IdentifierInfo *II = getIdentifierInfo()) {
-        return II->getName().data();
+        return II->getName();
     }
-    return tok::getTokenName(getKind());
+    return ::llvm::StringRef(tok::getTokenName(getKind()));
 }
 
 }

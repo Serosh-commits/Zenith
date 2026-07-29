@@ -146,7 +146,7 @@ public:
         PtrData = const_cast<void*>(D);
     }
 
-    const char *getName() const;
+    ::llvm::StringRef getName() const;
 
     unsigned getFlags() const { return Flags; }
     void setFlag(TokenFlags Flag) { Flags |= Flag; }
