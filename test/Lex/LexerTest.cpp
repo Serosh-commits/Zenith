@@ -106,3 +106,29 @@ TEST(LexerTest, CommentsAndWhitespaceSkipping) {
     EXPECT_EQ(Lexer::getSpelling(Tok, SM, LangOpts), "100");
     EXPECT_TRUE(Tok.hasLeadingSpace());
 }
+
+TEST(LexerTest, StringCharLiteralAndRawIdentifierSpelling) {
+    FileManager FM;
+    DiagnosticsEngine Diags;
+    SourceManager SM(FM, Diags);
+    LangOptions LangOpts;
+
+    const char *Source = "\"hello\" 'a' raw_id";
+    auto Buf = ::llvm::MemoryBuffer::getMemBuffer(Source);
+    FileID FID = SM.createFileID(std::move(Buf));
+
+    Lexer Lex(SM.getLocForStartOfFile(FID), LangOpts, Source, Source, Source + strlen(Source));
+    Token Tok;
+
+    Lex.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::string_literal);
+    EXPECT_EQ(Lexer::getSpelling(Tok, SM, LangOpts), "\"hello\"");
+
+    Lex.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::char_constant);
+    EXPECT_EQ(Lexer::getSpelling(Tok, SM, LangOpts), "'a'");
+
+    Lex.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::raw_identifier);
+    EXPECT_EQ(Tok.getRawIdentifier(), "raw_id");
+}
