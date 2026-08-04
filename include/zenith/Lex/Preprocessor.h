@@ -52,6 +52,7 @@ class Preprocessor {
     ::llvm::StringMap<MacroInfo*> Macros;
 
     std::deque<Token> TokenQueue;
+    std::vector<MacroInfo*> ActiveMacroExpansions;
 
     bool SkippingUntilDirective = false;
 

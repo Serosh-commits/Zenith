@@ -193,3 +193,49 @@ TEST(PreprocessorTest, NestedMacroInArgument) {
     PP.Lex(Tok);
     EXPECT_EQ(Tok.getKind(), tok::semi);
 }
+
+TEST(PreprocessorTest, SelfRecursiveMacroTerminates) {
+    FileManager FM;
+    DiagnosticsEngine Diags;
+    SourceManager SM(FM, Diags);
+    LangOptions LangOpts;
+    HeaderSearch Headers(FM);
+
+    Preprocessor PP(LangOpts, SM, Diags, Headers, FM);
+
+    const char *Source = "#define A A\nA;\n";
+    auto Buf = ::llvm::MemoryBuffer::getMemBuffer(Source);
+    FileID FID = SM.createFileID(std::move(Buf));
+    PP.EnterMainSourceFile(FID);
+
+    Token Tok;
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::identifier);
+    EXPECT_EQ(Tok.getIdentifierInfo()->getName(), "A");
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::semi);
+}
+
+TEST(PreprocessorTest, IndirectRecursiveMacroTerminates) {
+    FileManager FM;
+    DiagnosticsEngine Diags;
+    SourceManager SM(FM, Diags);
+    LangOptions LangOpts;
+    HeaderSearch Headers(FM);
+
+    Preprocessor PP(LangOpts, SM, Diags, Headers, FM);
+
+    const char *Source = "#define A B\n#define B A\nA;\n";
+    auto Buf = ::llvm::MemoryBuffer::getMemBuffer(Source);
+    FileID FID = SM.createFileID(std::move(Buf));
+    PP.EnterMainSourceFile(FID);
+
+    Token Tok;
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::identifier);
+    EXPECT_EQ(Tok.getIdentifierInfo()->getName(), "A");
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::semi);
+}

@@ -386,13 +386,12 @@ bool Preprocessor::ExpandMacro(Token &Identifier, IdentifierInfo *II, MacroInfo 
             MI->setDisabled(false);
             return false;
         }
-        preExpandArgs(Args);
     }
 
-    
-    enqueueReplacementTokens(MI, Identifier, Args);
+    ActiveMacroExpansions.push_back(MI);
+    preExpandArgs(Args);
 
-    MI->setDisabled(false);
+    enqueueReplacementTokens(MI, Identifier, Args);
 
     return true;
 }
@@ -417,6 +416,11 @@ bool Preprocessor::drainTokenQueue(Token &Result) {
 
         Result = TokenQueue.front();
         TokenQueue.pop_front();
+        if (TokenQueue.empty() && !ActiveMacroExpansions.empty()) {
+            for (MacroInfo *Active : ActiveMacroExpansions)
+                Active->setDisabled(false);
+            ActiveMacroExpansions.clear();
+        }
         return true;
     }
     return false;
