@@ -367,9 +367,6 @@ void Preprocessor::HandleEndifDirective(Token &Result) {
 }
 
 bool Preprocessor::ExpandMacro(Token &Identifier, IdentifierInfo *II, MacroInfo *MI) {
-    if (MI->tokens().empty())
-        return false;
-
     MI->setDisabled(true);
     
     std::vector<std::vector<Token>> Args;
@@ -377,7 +374,6 @@ bool Preprocessor::ExpandMacro(Token &Identifier, IdentifierInfo *II, MacroInfo 
         Token Next;
         CurLexer->Lex(Next);
         if (!Next.is(tok::l_paren) || Next.hasLeadingSpace()) {
-            
             TokenQueue.push_front(Next);
             MI->setDisabled(false);
             return false;
@@ -386,12 +382,20 @@ bool Preprocessor::ExpandMacro(Token &Identifier, IdentifierInfo *II, MacroInfo 
             MI->setDisabled(false);
             return false;
         }
+        if (Args.size() != MI->params().size()) {
+            MI->setDisabled(false);
+            return false;
+        }
+        preExpandArgs(Args);
     }
 
-    ActiveMacroExpansions.push_back(MI);
-    preExpandArgs(Args);
-
+    size_t QueueSizeBefore = TokenQueue.size();
     enqueueReplacementTokens(MI, Identifier, Args);
+    if (TokenQueue.size() > QueueSizeBefore) {
+        ActiveMacroExpansions.push_back({MI, QueueSizeBefore});
+    } else {
+        MI->setDisabled(false);
+    }
 
     return true;
 }
@@ -405,10 +409,11 @@ bool Preprocessor::drainTokenQueue(Token &Result) {
                 II = &Identifiers.get(Front.getRawIdentifier());
             if (II) {
                 if (MacroInfo *MI = getMacroInfo(II)) {
-                    if (!MI->isDisabled() && MI->isObjectLike()) {
-                        TokenQueue.pop_front();
-                        if (ExpandMacro(Front, II, MI))
+                    if (!MI->isDisabled()) {
+                        if (ExpandMacro(Front, II, MI)) {
+                            TokenQueue.pop_front();
                             continue;
+                        }
                     }
                 }
             }
@@ -416,11 +421,7 @@ bool Preprocessor::drainTokenQueue(Token &Result) {
 
         Result = TokenQueue.front();
         TokenQueue.pop_front();
-        if (TokenQueue.empty() && !ActiveMacroExpansions.empty()) {
-            for (MacroInfo *Active : ActiveMacroExpansions)
-                Active->setDisabled(false);
-            ActiveMacroExpansions.clear();
-        }
+        restoreDisabledMacros();
         return true;
     }
     return false;
@@ -429,7 +430,7 @@ bool Preprocessor::drainTokenQueue(Token &Result) {
 bool Preprocessor::parseInvocationArgs(std::vector<std::vector<Token>> &Args) {
     unsigned Depth = 0;
     Token Next;
-    Args.emplace_back();
+    Args.clear();
     while (true) {
         if (!CurLexer->Lex(Next))
             return false;
@@ -438,21 +439,28 @@ bool Preprocessor::parseInvocationArgs(std::vector<std::vector<Token>> &Args) {
 
         if (Next.is(tok::l_paren)) {
             Depth++;
+            if (Args.empty())
+                Args.emplace_back();
             Args.back().push_back(Next);
             continue;
         }
         if (Next.is(tok::r_paren)) {
-            if (Depth == 0) {
+            if (Depth == 0)
                 break;
-            }
             Depth--;
+            if (Args.empty())
+                Args.emplace_back();
             Args.back().push_back(Next);
             continue;
         }
         if (Depth == 0 && Next.is(tok::comma)) {
+            if (Args.empty())
+                Args.emplace_back();
             Args.emplace_back();
             continue;
         }
+        if (Args.empty())
+            Args.emplace_back();
         Args.back().push_back(Next);
     }
     return true;
@@ -470,11 +478,12 @@ void Preprocessor::preExpandArgs(std::vector<std::vector<Token>> &Args) {
                     AII = &Identifiers.get(T.getRawIdentifier());
                 if (AII) {
                     if (MacroInfo *AMI = getMacroInfo(AII)) {
-                        if (!AMI->isDisabled() && AMI->isObjectLike()) {
+                        if (!AMI->isDisabled()) {
                             if (ExpandMacro(T, AII, AMI)) {
                                 while (!TokenQueue.empty()) {
                                     Expanded.push_back(TokenQueue.front());
                                     TokenQueue.pop_front();
+                                    restoreDisabledMacros();
                                 }
                                 continue;
                             }
@@ -488,7 +497,26 @@ void Preprocessor::preExpandArgs(std::vector<std::vector<Token>> &Args) {
     }
 }
 
+void Preprocessor::restoreDisabledMacros() {
+    while (!ActiveMacroExpansions.empty() &&
+           ActiveMacroExpansions.back().QueueSizeBefore == TokenQueue.size()) {
+        ActiveMacroExpansions.back().MI->setDisabled(false);
+        ActiveMacroExpansions.pop_back();
+    }
+}
+
 void Preprocessor::enqueueReplacementTokens(MacroInfo *MI, Token &Identifier, const std::vector<std::vector<Token>> &Args) {
+    bool EmittedAny = false;
+    auto applyInvocationFlags = [&](Token &Tok) {
+        if (!EmittedAny) {
+            if (Identifier.isAtStartOfLine())
+                Tok.setFlag(Token::StartOfLine);
+            if (Identifier.hasLeadingSpace())
+                Tok.setFlag(Token::LeadingSpace);
+            EmittedAny = true;
+        }
+    };
+
     for (size_t i = 0; i < MI->tokens().size(); ++i) {
         const Token &T = MI->tokens()[i];
 
@@ -507,6 +535,7 @@ void Preprocessor::enqueueReplacementTokens(MacroInfo *MI, Token &Identifier, co
                             Copy.setLocation(Identifier.getLocation());
                             Copy.clearFlag(Token::StartOfLine);
                             Copy.clearFlag(Token::LeadingSpace);
+                            applyInvocationFlags(Copy);
                             TokenQueue.push_back(Copy);
                         }
                     }
@@ -514,20 +543,15 @@ void Preprocessor::enqueueReplacementTokens(MacroInfo *MI, Token &Identifier, co
                     break;
                 }
             }
-            if (Substituted) continue;
+            if (Substituted)
+                continue;
         }
 
         Token Copy = T;
         Copy.setLocation(Identifier.getLocation());
-
         Copy.clearFlag(Token::StartOfLine);
         Copy.clearFlag(Token::LeadingSpace);
-
-        if (i == 0) {
-            if (Identifier.isAtStartOfLine()) Copy.setFlag(Token::StartOfLine);
-            if (Identifier.hasLeadingSpace()) Copy.setFlag(Token::LeadingSpace);
-        }
-
+        applyInvocationFlags(Copy);
         TokenQueue.push_back(Copy);
     }
 }
