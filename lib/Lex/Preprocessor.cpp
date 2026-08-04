@@ -1,5 +1,6 @@
 #include "zenith/Lex/Preprocessor.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include <iostream>
 
 namespace zenith {
 
@@ -51,8 +52,9 @@ void Preprocessor::EnterSourceFile(FileID FID, SourceLocation IncludeLoc) {
 void Preprocessor::Lex(Token &Result) {
     bool NeedLex = true;
     while (true) {
-        if (drainTokenQueue(Result))
+        if (drainTokenQueue(Result)) {
             return;
+        }
         if (!CurLexer) {
             Result.startToken();
             Result.setKind(tok::eof);
@@ -366,7 +368,7 @@ void Preprocessor::HandleEndifDirective(Token &Result) {
     }
 }
 
-bool Preprocessor::ExpandMacro(Token &Identifier, IdentifierInfo *II, MacroInfo *MI) {
+bool Preprocessor::ExpandMacro(Token &Identifier, IdentifierInfo *II, MacroInfo *MI, bool InsertAtFront) {
     MI->setDisabled(true);
     
     std::vector<std::vector<Token>> Args;
@@ -390,7 +392,7 @@ bool Preprocessor::ExpandMacro(Token &Identifier, IdentifierInfo *II, MacroInfo 
     }
 
     size_t QueueSizeBefore = TokenQueue.size();
-    enqueueReplacementTokens(MI, Identifier, Args);
+    enqueueReplacementTokens(MI, Identifier, Args, InsertAtFront);
     if (TokenQueue.size() > QueueSizeBefore) {
         ActiveMacroExpansions.push_back({MI, QueueSizeBefore});
     } else {
@@ -410,10 +412,12 @@ bool Preprocessor::drainTokenQueue(Token &Result) {
             if (II) {
                 if (MacroInfo *MI = getMacroInfo(II)) {
                     if (!MI->isDisabled()) {
-                        if (ExpandMacro(Front, II, MI)) {
-                            TokenQueue.pop_front();
+                        TokenQueue.pop_front();
+                        if (ExpandMacro(Front, II, MI, true))
                             continue;
-                        }
+                        Result = Front;
+                        restoreDisabledMacros();
+                        return true;
                     }
                 }
             }
@@ -505,7 +509,7 @@ void Preprocessor::restoreDisabledMacros() {
     }
 }
 
-void Preprocessor::enqueueReplacementTokens(MacroInfo *MI, Token &Identifier, const std::vector<std::vector<Token>> &Args) {
+void Preprocessor::enqueueReplacementTokens(MacroInfo *MI, Token &Identifier, const std::vector<std::vector<Token>> &Args, bool InsertAtFront) {
     bool EmittedAny = false;
     auto applyInvocationFlags = [&](Token &Tok) {
         if (!EmittedAny) {
@@ -517,6 +521,7 @@ void Preprocessor::enqueueReplacementTokens(MacroInfo *MI, Token &Identifier, co
         }
     };
 
+    std::vector<Token> Replacement;
     for (size_t i = 0; i < MI->tokens().size(); ++i) {
         const Token &T = MI->tokens()[i];
 
@@ -532,11 +537,10 @@ void Preprocessor::enqueueReplacementTokens(MacroInfo *MI, Token &Identifier, co
                     if (p < Args.size()) {
                         for (const Token &AT : Args[p]) {
                             Token Copy = AT;
-                            Copy.setLocation(Identifier.getLocation());
                             Copy.clearFlag(Token::StartOfLine);
                             Copy.clearFlag(Token::LeadingSpace);
                             applyInvocationFlags(Copy);
-                            TokenQueue.push_back(Copy);
+                            Replacement.push_back(Copy);
                         }
                     }
                     Substituted = true;
@@ -548,12 +552,20 @@ void Preprocessor::enqueueReplacementTokens(MacroInfo *MI, Token &Identifier, co
         }
 
         Token Copy = T;
-        Copy.setLocation(Identifier.getLocation());
         Copy.clearFlag(Token::StartOfLine);
         Copy.clearFlag(Token::LeadingSpace);
         applyInvocationFlags(Copy);
-        TokenQueue.push_back(Copy);
+        Replacement.push_back(Copy);
     }
+
+    if (InsertAtFront) {
+        for (size_t i = Replacement.size(); i > 0; --i)
+            TokenQueue.push_front(Replacement[i - 1]);
+    } else {
+        for (auto &Tok : Replacement)
+            TokenQueue.push_back(Tok);
+    }
+
 }
 
 }
