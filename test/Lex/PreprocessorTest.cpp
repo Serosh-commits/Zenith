@@ -194,6 +194,33 @@ TEST(PreprocessorTest, NestedMacroInArgument) {
     EXPECT_EQ(Tok.getKind(), tok::semi);
 }
 
+TEST(PreprocessorTest, NestedMacroExpansionOrder) {
+    FileManager FM;
+    DiagnosticsEngine Diags;
+    SourceManager SM(FM, Diags);
+    LangOptions LangOpts;
+    HeaderSearch Headers(FM);
+
+    Preprocessor PP(LangOpts, SM, Diags, Headers, FM);
+
+    const char *Source = "#define A B C\n#define B 1\nA;\n";
+    auto Buf = ::llvm::MemoryBuffer::getMemBuffer(Source);
+    FileID FID = SM.createFileID(std::move(Buf));
+    PP.EnterMainSourceFile(FID);
+
+    Token Tok;
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::numeric_constant);
+    EXPECT_EQ(Lexer::getSpelling(Tok, SM, LangOpts), "1");
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::identifier);
+    EXPECT_EQ(Tok.getIdentifierInfo()->getName(), "C");
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::semi);
+}
+
 TEST(PreprocessorTest, SelfRecursiveMacroTerminates) {
     FileManager FM;
     DiagnosticsEngine Diags;
