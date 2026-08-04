@@ -11,6 +11,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include <vector>
 #include <memory>
+#include <deque>
 
 namespace zenith {
 
@@ -50,6 +51,14 @@ class Preprocessor {
 
     ::llvm::StringMap<MacroInfo*> Macros;
 
+    struct ActiveMacroScope {
+        MacroInfo *MI;
+        size_t QueueSizeBefore;
+    };
+
+    std::deque<Token> TokenQueue;
+    std::vector<ActiveMacroScope> ActiveMacroExpansions;
+
     bool SkippingUntilDirective = false;
 
     bool HandleDirective(Token &Result);
@@ -63,7 +72,12 @@ class Preprocessor {
     void HandleElifDirective(Token &Result);
     void HandleEndifDirective(Token &Result);
 
-    bool ExpandMacro(Token &Result, IdentifierInfo *II, MacroInfo *MI);
+    bool ExpandMacro(Token &Result, IdentifierInfo *II, MacroInfo *MI, bool InsertAtFront = false);
+    bool drainTokenQueue(Token &Result);
+    bool parseInvocationArgs(std::vector<std::vector<Token>> &Args);
+    void preExpandArgs(std::vector<std::vector<Token>> &Args);
+    void restoreDisabledMacros();
+    void enqueueReplacementTokens(MacroInfo *MI, Token &Identifier, const std::vector<std::vector<Token>> &Args, bool InsertAtFront = false);
 
 public:
     Preprocessor(LangOptions &LangOpts, SourceManager &SourceMgr,

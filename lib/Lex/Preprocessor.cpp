@@ -1,5 +1,6 @@
 #include "zenith/Lex/Preprocessor.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include <iostream>
 
 namespace zenith {
 
@@ -51,6 +52,9 @@ void Preprocessor::EnterSourceFile(FileID FID, SourceLocation IncludeLoc) {
 void Preprocessor::Lex(Token &Result) {
     bool NeedLex = true;
     while (true) {
+        if (drainTokenQueue(Result)) {
+            return;
+        }
         if (!CurLexer) {
             Result.startToken();
             Result.setKind(tok::eof);
@@ -193,10 +197,52 @@ void Preprocessor::HandleDefineDirective(Token &Result) {
 
     MacroInfo *MI = new MacroInfo(Result.getLocation());
 
-    while (true) {
-        CurLexer->Lex(Result);
-        if (Result.is(tok::eod) || Result.is(tok::eof) || Result.isAtStartOfLine()) break;
-        MI->ReplacementTokens.push_back(Result);
+    CurLexer->Lex(Result);
+    if (Result.is(tok::l_paren) && !Result.hasLeadingSpace()) {
+        MI->IsObjectLike = false;
+        MI->IsFunctionLike = true;
+
+        while (true) {
+            CurLexer->Lex(Result);
+            if (Result.is(tok::r_paren) || Result.is(tok::eof) || Result.is(tok::eod)) break;
+
+            if (Result.is(tok::identifier) || Result.is(tok::raw_identifier)) {
+                IdentifierInfo *PI = Result.getIdentifierInfo();
+                if (!PI && Result.is(tok::raw_identifier)) {
+                    PI = &Identifiers.get(Result.getRawIdentifier());
+                }
+                if (PI)
+                    MI->Params.push_back(PI);
+            }
+
+            if (Result.is(tok::comma)) continue;
+        }
+
+        while (true) {
+            CurLexer->Lex(Result);
+            if (Result.is(tok::eod) || Result.is(tok::eof) || Result.isAtStartOfLine()) break;
+            Token Copy = Result;
+            if (Copy.is(tok::raw_identifier)) {
+                ::llvm::StringRef Raw = Copy.getRawIdentifier();
+                IdentifierInfo &II = Identifiers.get(Raw);
+                Copy.setKind(tok::identifier);
+                Copy.setIdentifierInfo(&II);
+            }
+            MI->ReplacementTokens.push_back(Copy);
+        }
+    } else {
+        while (true) {
+            if (Result.is(tok::eod) || Result.is(tok::eof) || Result.isAtStartOfLine()) break;
+            Token Copy = Result;
+            if (Copy.is(tok::raw_identifier)) {
+                ::llvm::StringRef Raw = Copy.getRawIdentifier();
+                IdentifierInfo &II = Identifiers.get(Raw);
+                Copy.setKind(tok::identifier);
+                Copy.setIdentifierInfo(&II);
+            }
+            MI->ReplacementTokens.push_back(Copy);
+            CurLexer->Lex(Result);
+        }
     }
 
     setMacroInfo(MacroName, MI);
@@ -322,19 +368,204 @@ void Preprocessor::HandleEndifDirective(Token &Result) {
     }
 }
 
-bool Preprocessor::ExpandMacro(Token &Identifier, IdentifierInfo *II, MacroInfo *MI) {
-    if (MI->tokens().empty())
-        return false;
-
+bool Preprocessor::ExpandMacro(Token &Identifier, IdentifierInfo *II, MacroInfo *MI, bool InsertAtFront) {
     MI->setDisabled(true);
-    Token ExpandedTok = MI->tokens().front();
-    ExpandedTok.setLocation(Identifier.getLocation());
-    if (Identifier.isAtStartOfLine()) ExpandedTok.setFlag(Token::StartOfLine);
-    if (Identifier.hasLeadingSpace()) ExpandedTok.setFlag(Token::LeadingSpace);
+    
+    std::vector<std::vector<Token>> Args;
+    if (MI->isFunctionLike()) {
+        Token Next;
+        CurLexer->Lex(Next);
+        if (!Next.is(tok::l_paren) || Next.hasLeadingSpace()) {
+            TokenQueue.push_front(Next);
+            MI->setDisabled(false);
+            return false;
+        }
+        if (!parseInvocationArgs(Args)) {
+            MI->setDisabled(false);
+            return false;
+        }
+        if (Args.size() != MI->params().size()) {
+            MI->setDisabled(false);
+            return false;
+        }
+        preExpandArgs(Args);
+    }
 
-    Identifier = ExpandedTok;
-    MI->setDisabled(false);
+    size_t QueueSizeBefore = TokenQueue.size();
+    enqueueReplacementTokens(MI, Identifier, Args, InsertAtFront);
+    if (TokenQueue.size() > QueueSizeBefore) {
+        ActiveMacroExpansions.push_back({MI, QueueSizeBefore});
+    } else {
+        MI->setDisabled(false);
+    }
+
+    return true;
+}
+
+bool Preprocessor::drainTokenQueue(Token &Result) {
+    while (!TokenQueue.empty()) {
+        Token Front = TokenQueue.front();
+        if (Front.is(tok::identifier) || Front.is(tok::raw_identifier)) {
+            IdentifierInfo *II = Front.getIdentifierInfo();
+            if (!II && Front.is(tok::raw_identifier))
+                II = &Identifiers.get(Front.getRawIdentifier());
+            if (II) {
+                if (MacroInfo *MI = getMacroInfo(II)) {
+                    if (!MI->isDisabled()) {
+                        TokenQueue.pop_front();
+                        if (ExpandMacro(Front, II, MI, true))
+                            continue;
+                        Result = Front;
+                        restoreDisabledMacros();
+                        return true;
+                    }
+                }
+            }
+        }
+
+        Result = TokenQueue.front();
+        TokenQueue.pop_front();
+        restoreDisabledMacros();
+        return true;
+    }
     return false;
+}
+
+bool Preprocessor::parseInvocationArgs(std::vector<std::vector<Token>> &Args) {
+    unsigned Depth = 0;
+    Token Next;
+    Args.clear();
+    while (true) {
+        if (!CurLexer->Lex(Next))
+            return false;
+        if (Next.is(tok::eof))
+            return false;
+
+        if (Next.is(tok::l_paren)) {
+            Depth++;
+            if (Args.empty())
+                Args.emplace_back();
+            Args.back().push_back(Next);
+            continue;
+        }
+        if (Next.is(tok::r_paren)) {
+            if (Depth == 0)
+                break;
+            Depth--;
+            if (Args.empty())
+                Args.emplace_back();
+            Args.back().push_back(Next);
+            continue;
+        }
+        if (Depth == 0 && Next.is(tok::comma)) {
+            if (Args.empty())
+                Args.emplace_back();
+            Args.emplace_back();
+            continue;
+        }
+        if (Args.empty())
+            Args.emplace_back();
+        Args.back().push_back(Next);
+    }
+    return true;
+}
+
+void Preprocessor::preExpandArgs(std::vector<std::vector<Token>> &Args) {
+    for (auto &Arg : Args) {
+        std::vector<Token> Expanded;
+        for (size_t ti = 0; ti < Arg.size(); ++ti) {
+            Token T = Arg[ti];
+            // i know this feels a bit of ugly i will split it up to helpers in follow up PRs
+            if (T.is(tok::identifier) || T.is(tok::raw_identifier)) {
+                IdentifierInfo *AII = T.getIdentifierInfo();
+                if (!AII && T.is(tok::raw_identifier))
+                    AII = &Identifiers.get(T.getRawIdentifier());
+                if (AII) {
+                    if (MacroInfo *AMI = getMacroInfo(AII)) {
+                        if (!AMI->isDisabled()) {
+                            if (ExpandMacro(T, AII, AMI)) {
+                                while (!TokenQueue.empty()) {
+                                    Expanded.push_back(TokenQueue.front());
+                                    TokenQueue.pop_front();
+                                    restoreDisabledMacros();
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+            Expanded.push_back(T);
+        }
+        Arg.swap(Expanded);
+    }
+}
+
+void Preprocessor::restoreDisabledMacros() {
+    while (!ActiveMacroExpansions.empty() &&
+           ActiveMacroExpansions.back().QueueSizeBefore == TokenQueue.size()) {
+        ActiveMacroExpansions.back().MI->setDisabled(false);
+        ActiveMacroExpansions.pop_back();
+    }
+}
+
+void Preprocessor::enqueueReplacementTokens(MacroInfo *MI, Token &Identifier, const std::vector<std::vector<Token>> &Args, bool InsertAtFront) {
+    bool EmittedAny = false;
+    auto applyInvocationFlags = [&](Token &Tok) {
+        if (!EmittedAny) {
+            if (Identifier.isAtStartOfLine())
+                Tok.setFlag(Token::StartOfLine);
+            if (Identifier.hasLeadingSpace())
+                Tok.setFlag(Token::LeadingSpace);
+            EmittedAny = true;
+        }
+    };
+
+    std::vector<Token> Replacement;
+    for (size_t i = 0; i < MI->tokens().size(); ++i) {
+        const Token &T = MI->tokens()[i];
+
+        if (MI->isFunctionLike() && (T.is(tok::identifier) || T.is(tok::raw_identifier))) {
+            IdentifierInfo *PI = T.getIdentifierInfo();
+            ::llvm::StringRef RawName;
+            if (!PI && T.is(tok::raw_identifier))
+                RawName = T.getRawIdentifier();
+
+            bool Substituted = false;
+            for (size_t p = 0; p < MI->params().size(); ++p) {
+                if ((PI && MI->params()[p] == PI) || (!PI && !RawName.empty() && MI->params()[p]->getName() == RawName)) {
+                    if (p < Args.size()) {
+                        for (const Token &AT : Args[p]) {
+                            Token Copy = AT;
+                            Copy.clearFlag(Token::StartOfLine);
+                            Copy.clearFlag(Token::LeadingSpace);
+                            applyInvocationFlags(Copy);
+                            Replacement.push_back(Copy);
+                        }
+                    }
+                    Substituted = true;
+                    break;
+                }
+            }
+            if (Substituted)
+                continue;
+        }
+
+        Token Copy = T;
+        Copy.clearFlag(Token::StartOfLine);
+        Copy.clearFlag(Token::LeadingSpace);
+        applyInvocationFlags(Copy);
+        Replacement.push_back(Copy);
+    }
+
+    if (InsertAtFront) {
+        for (size_t i = Replacement.size(); i > 0; --i)
+            TokenQueue.push_front(Replacement[i - 1]);
+    } else {
+        for (auto &Tok : Replacement)
+            TokenQueue.push_back(Tok);
+    }
+
 }
 
 }

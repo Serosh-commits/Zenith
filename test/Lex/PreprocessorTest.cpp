@@ -93,3 +93,176 @@ TEST(PreprocessorTest, UndefDirective) {
     EXPECT_EQ(Tok.getKind(), tok::identifier);
     EXPECT_EQ(Tok.getIdentifierInfo()->getName(), "no");
 }
+
+TEST(PreprocessorTest, ObjectLikeMultiTokenMacro) {
+    FileManager FM;
+    DiagnosticsEngine Diags;
+    SourceManager SM(FM, Diags);
+    LangOptions LangOpts;
+    HeaderSearch Headers(FM);
+
+    Preprocessor PP(LangOpts, SM, Diags, Headers, FM);
+
+    const char *Source = "#define A int b\nA c;\n";
+    auto Buf = ::llvm::MemoryBuffer::getMemBuffer(Source);
+    FileID FID = SM.createFileID(std::move(Buf));
+    PP.EnterMainSourceFile(FID);
+
+    Token Tok;
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::kw_int);
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::identifier);
+    EXPECT_EQ(Tok.getIdentifierInfo()->getName(), "b");
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::identifier);
+    EXPECT_EQ(Tok.getIdentifierInfo()->getName(), "c");
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::semi);
+}
+
+TEST(PreprocessorTest, FunctionLikeMacroSimple) {
+    FileManager FM;
+    DiagnosticsEngine Diags;
+    SourceManager SM(FM, Diags);
+    LangOptions LangOpts;
+    HeaderSearch Headers(FM);
+
+    Preprocessor PP(LangOpts, SM, Diags, Headers, FM);
+
+    const char *Source = "#define F(x) x + x\nint y = F(1);\n";
+    auto Buf = ::llvm::MemoryBuffer::getMemBuffer(Source);
+    FileID FID = SM.createFileID(std::move(Buf));
+    PP.EnterMainSourceFile(FID);
+
+    Token Tok;
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::kw_int);
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::identifier);
+    EXPECT_EQ(Tok.getIdentifierInfo()->getName(), "y");
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::equal);
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::numeric_constant);
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::plus);
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::numeric_constant);
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::semi);
+}
+
+TEST(PreprocessorTest, NestedMacroInArgument) {
+    FileManager FM;
+    DiagnosticsEngine Diags;
+    SourceManager SM(FM, Diags);
+    LangOptions LangOpts;
+    HeaderSearch Headers(FM);
+
+    Preprocessor PP(LangOpts, SM, Diags, Headers, FM);
+
+    const char *Source = "#define A 1\n#define B(x) x\nint v = B(A);\n";
+    auto Buf = ::llvm::MemoryBuffer::getMemBuffer(Source);
+    FileID FID = SM.createFileID(std::move(Buf));
+    PP.EnterMainSourceFile(FID);
+
+    Token Tok;
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::kw_int);
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::identifier);
+    EXPECT_EQ(Tok.getIdentifierInfo()->getName(), "v");
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::equal);
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::numeric_constant);
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::semi);
+}
+
+TEST(PreprocessorTest, NestedMacroExpansionOrder) {
+    FileManager FM;
+    DiagnosticsEngine Diags;
+    SourceManager SM(FM, Diags);
+    LangOptions LangOpts;
+    HeaderSearch Headers(FM);
+
+    Preprocessor PP(LangOpts, SM, Diags, Headers, FM);
+
+    const char *Source = "#define A B C\n#define B 1\nA;\n";
+    auto Buf = ::llvm::MemoryBuffer::getMemBuffer(Source);
+    FileID FID = SM.createFileID(std::move(Buf));
+    PP.EnterMainSourceFile(FID);
+
+    Token Tok;
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::numeric_constant);
+    EXPECT_EQ(Lexer::getSpelling(Tok, SM, LangOpts), "1");
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::identifier);
+    EXPECT_EQ(Tok.getIdentifierInfo()->getName(), "C");
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::semi);
+}
+
+TEST(PreprocessorTest, SelfRecursiveMacroTerminates) {
+    FileManager FM;
+    DiagnosticsEngine Diags;
+    SourceManager SM(FM, Diags);
+    LangOptions LangOpts;
+    HeaderSearch Headers(FM);
+
+    Preprocessor PP(LangOpts, SM, Diags, Headers, FM);
+
+    const char *Source = "#define A A\nA;\n";
+    auto Buf = ::llvm::MemoryBuffer::getMemBuffer(Source);
+    FileID FID = SM.createFileID(std::move(Buf));
+    PP.EnterMainSourceFile(FID);
+
+    Token Tok;
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::identifier);
+    EXPECT_EQ(Tok.getIdentifierInfo()->getName(), "A");
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::semi);
+}
+
+TEST(PreprocessorTest, IndirectRecursiveMacroTerminates) {
+    FileManager FM;
+    DiagnosticsEngine Diags;
+    SourceManager SM(FM, Diags);
+    LangOptions LangOpts;
+    HeaderSearch Headers(FM);
+
+    Preprocessor PP(LangOpts, SM, Diags, Headers, FM);
+
+    const char *Source = "#define A B\n#define B A\nA;\n";
+    auto Buf = ::llvm::MemoryBuffer::getMemBuffer(Source);
+    FileID FID = SM.createFileID(std::move(Buf));
+    PP.EnterMainSourceFile(FID);
+
+    Token Tok;
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::identifier);
+    EXPECT_EQ(Tok.getIdentifierInfo()->getName(), "A");
+
+    PP.Lex(Tok);
+    EXPECT_EQ(Tok.getKind(), tok::semi);
+}
