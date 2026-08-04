@@ -67,6 +67,10 @@ class Preprocessor {
     void HandleEndifDirective(Token &Result);
 
     bool ExpandMacro(Token &Result, IdentifierInfo *II, MacroInfo *MI);
+    bool drainTokenQueue(Token &Result);
+    bool parseInvocationArgs(std::vector<std::vector<Token>> &Args);
+    void preExpandArgs(std::vector<std::vector<Token>> &Args);
+    void enqueueReplacementTokens(MacroInfo *MI, Token &Identifier, const std::vector<std::vector<Token>> &Args);
 
 public:
     Preprocessor(LangOptions &LangOpts, SourceManager &SourceMgr,
