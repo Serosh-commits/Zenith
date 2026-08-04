@@ -51,8 +51,13 @@ class Preprocessor {
 
     ::llvm::StringMap<MacroInfo*> Macros;
 
+    struct ActiveMacroScope {
+        MacroInfo *MI;
+        size_t QueueSizeBefore;
+    };
+
     std::deque<Token> TokenQueue;
-    std::vector<MacroInfo*> ActiveMacroExpansions;
+    std::vector<ActiveMacroScope> ActiveMacroExpansions;
 
     bool SkippingUntilDirective = false;
 
@@ -71,6 +76,7 @@ class Preprocessor {
     bool drainTokenQueue(Token &Result);
     bool parseInvocationArgs(std::vector<std::vector<Token>> &Args);
     void preExpandArgs(std::vector<std::vector<Token>> &Args);
+    void restoreDisabledMacros();
     void enqueueReplacementTokens(MacroInfo *MI, Token &Identifier, const std::vector<std::vector<Token>> &Args);
 
 public:
