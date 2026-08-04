@@ -51,6 +51,11 @@ void Preprocessor::EnterSourceFile(FileID FID, SourceLocation IncludeLoc) {
 void Preprocessor::Lex(Token &Result) {
     bool NeedLex = true;
     while (true) {
+        if (!TokenQueue.empty()) {
+            Result = TokenQueue.front();
+            TokenQueue.pop_front();
+            return;
+        }
         if (!CurLexer) {
             Result.startToken();
             Result.setKind(tok::eof);
@@ -327,14 +332,23 @@ bool Preprocessor::ExpandMacro(Token &Identifier, IdentifierInfo *II, MacroInfo 
         return false;
 
     MI->setDisabled(true);
-    Token ExpandedTok = MI->tokens().front();
-    ExpandedTok.setLocation(Identifier.getLocation());
-    if (Identifier.isAtStartOfLine()) ExpandedTok.setFlag(Token::StartOfLine);
-    if (Identifier.hasLeadingSpace()) ExpandedTok.setFlag(Token::LeadingSpace);
+    for (size_t i = 0; i < MI->tokens().size(); ++i) {
+        const Token &T = MI->tokens()[i];
+        Token Copy = T;
+        Copy.setLocation(Identifier.getLocation());
+        if (i == 0) {
+            if (Identifier.isAtStartOfLine()) Copy.setFlag(Token::StartOfLine);
+            if (Identifier.hasLeadingSpace()) Copy.setFlag(Token::LeadingSpace);
+        } else {
+            Copy.clearFlag(Token::StartOfLine);
+            Copy.clearFlag(Token::LeadingSpace);
+        }
+        TokenQueue.push_back(Copy);
+    }
 
-    Identifier = ExpandedTok;
     MI->setDisabled(false);
-    return false;
+
+    return true;
 }
 
 }

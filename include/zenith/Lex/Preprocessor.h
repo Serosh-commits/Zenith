@@ -11,6 +11,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include <vector>
 #include <memory>
+#include <deque>
 
 namespace zenith {
 
@@ -49,6 +50,8 @@ class Preprocessor {
     Lexer *CurLexer = nullptr;
 
     ::llvm::StringMap<MacroInfo*> Macros;
+
+    std::deque<Token> TokenQueue;
 
     bool SkippingUntilDirective = false;
 
