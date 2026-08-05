@@ -1,6 +1,5 @@
 #include "zenith/Lex/Preprocessor.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include <iostream>
 
 namespace zenith {
 
